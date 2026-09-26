@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Mapa de Mascotas Perdidas</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #map { height: 100vh; }
+    #panel {
+      position: absolute; top: 10px; right: 10px; z-index: 1000;
+      background: white; padding: 10px; border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 14px;
+    }
+    #panel input { width: 60px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="panel">
+    <b>Buscar por cercanía</b><br>
+    Radio (km): <input type="number" id="radio" value="5" min="1"><br>
+    <button onclick="buscarPorRadio()">Buscar cerca del centro del mapa</button><br>
+    <button onclick="cargarTodos()">Mostrar todos</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([-33.45, -70.65], 12);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const marcadores = L.layerGroup().addTo(map);
+
+    function dibujarReportes(reportes) {
+  marcadores.clearLayers();
+  reportes.forEach(reporte => {
+    const color = reporte.tipo === 'perdida' ? 'red' : 'green';
+    const fotoHtml = reporte.foto_url
+      ? `<br><img src="${reporte.foto_url}" width="120">`
+      : '';
+    const botonSugerencias = reporte.foto_url
+      ? `<br><button onclick="verSugerencias(${reporte.id})">Ver posibles coincidencias</button>`
+      : '';
+
+    L.circleMarker([reporte.latitud, reporte.longitud], { color, radius: 8 })
+      .addTo(marcadores)
+      .bindPopup(`
+        <div id="popup-${reporte.id}">
+          <b>${reporte.tipo.toUpperCase()}</b><br>${reporte.especie}<br>${reporte.descripcion ?? ''}${fotoHtml}${botonSugerencias}
+        </div>
+      `);
+  });
+}
+
+function verSugerencias(reporteId) {
+  fetch(`/reportes/${reporteId}/sugerencias`)
+    .then(r => r.json())
+    .then(sugerencias => {
+      const contenedor = document.getElementById(`popup-${reporteId}`);
+
+      if (sugerencias.length === 0) {
+        contenedor.innerHTML += '<br><i>Sin coincidencias por ahora.</i>';
+        return;
+      }
+
+      let html = '<br><b>Posibles coincidencias:</b>';
+      sugerencias.forEach(s => {
+        const r = s.reporte;
+        html += `
+          <div style="border-top: 1px solid #ccc; margin-top: 5px; padding-top: 5px;">
+            <img src="${r.foto_url}" width="80"><br>
+            ${r.especie} — similitud: ${(s.similitud * 100).toFixed(0)}%
+          </div>
+        `;
+      });
+      contenedor.innerHTML += html;
+    });
+}
+    function cargarTodos() {
+      fetch('/reportes/')
+        .then(r => r.json())
+        .then(dibujarReportes);
+    }
+
+    function buscarPorRadio() {
+      const centro = map.getCenter();
+      const radio = document.getElementById('radio').value;
+      const url = `/reportes/?lat=${centro.lat}&lon=${centro.lng}&radio_km=${radio}`;
+      fetch(url)
+        .then(r => r.json())
+        .then(dibujarReportes);
+    }
+
+    cargarTodos();
+
+    map.on('click', function (e) {
+      const { lat, lng } = e.latlng;
+
+      const formularioHtml = `
+        <form id="form-reporte">
+          <select id="f-tipo">
+            <option value="perdida">Perdida</option>
+            <option value="encontrada">Encontrada</option>
+          </select><br>
+          <input id="f-especie" placeholder="Especie (ej: perro)" required><br>
+          <input id="f-descripcion" placeholder="Descripción"><br>
+          <input type="file" id="f-foto" accept="image/*"><br>
+          <button type="submit">Guardar reporte aquí</button>
+        </form>
+      `;
+
+      const popup = L.popup().setLatLng([lat, lng]).setContent(formularioHtml).openOn(map);
+
+      document.getElementById('form-reporte').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+
+        const archivoFoto = document.getElementById('f-foto').files[0];
+
+        // Función auxiliar: crea el reporte una vez que ya sabemos la foto_url (o null si no hay foto)
+        function crearReporte(fotoUrl, embedding) {
+  const nuevoReporte = {
+    tipo: document.getElementById('f-tipo').value,
+    especie: document.getElementById('f-especie').value,
+    descripcion: document.getElementById('f-descripcion').value,
+    foto_url: fotoUrl,
+    embedding: embedding || null,
+    latitud: lat,
+    longitud: lng
+  };
+
+          fetch('/reportes/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(nuevoReporte)
+          })
+            .then(r => r.json())
+            .then(() => {
+              map.closePopup();
+              cargarTodos();
+            });
+        }
+
+        if (archivoFoto) {
+  const datosFormulario = new FormData();
+  datosFormulario.append('archivo', archivoFoto);
+
+  fetch('/reportes/subir-foto', {
+    method: 'POST',
+    body: datosFormulario
+  })
+    .then(r => r.json())
+    .then(resultado => crearReporte(resultado.foto_url, resultado.embedding));
+
+        } else {
+          // No se seleccionó foto: crea el reporte sin ella
+          crearReporte(null);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
