@@ -4,3 +4,5 @@ __pycache__/
 .env
 .DS_Store
 Fotos/
+app/static/uploads/*
+!app/static/uploads/.gitkeep
